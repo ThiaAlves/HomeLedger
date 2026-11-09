@@ -505,3 +505,106 @@ describe('linking existing card transactions', () => {
     expect(() => cards.assign(2, 1, { ...input, key: randomUUID() })).toThrow();
   });
 });
+
+describe('recurring income', () => {
+  const salary = () => {
+    db.exec(
+      "INSERT INTO categories(id,user_id,name,type,is_system,created_at) VALUES(3,1,'Salário','Ingreso',0,'now')",
+    );
+    return create({
+      direction: 'income',
+      kind: 'recurring',
+      categoryId: 3,
+      name: 'Salário',
+      amountCents: 500000,
+      firstDue: '2026-11-05',
+    });
+  };
+  it('forecasts monthly salary without crediting the bank before confirmation', () => {
+    salary();
+    const list = service.list(1) as { direction: string; due_date: string }[];
+    expect(list.length).toBeGreaterThanOrEqual(24);
+    expect(list.every((r) => r.direction === 'income')).toBe(true);
+    expect(list.slice(0, 3).map((r) => r.due_date)).toEqual([
+      '2026-11-05',
+      '2026-12-05',
+      '2027-01-05',
+    ]);
+    expect(db.prepare('SELECT COUNT(*) n FROM transactions').get()).toEqual({ n: 0 });
+  });
+  it('records receipt as income, including partial receipts and retries', () => {
+    salary();
+    const id = rows()[0]!.id;
+    const input = { amountCents: 300000, date: '2026-11-05', key: randomUUID() };
+    service.pay(1, id, input, 'income');
+    service.pay(1, id, input, 'income');
+    expect(db.prepare('SELECT type,amount,account_id FROM transactions').get()).toEqual({
+      type: 'Ingreso',
+      amount: 3000,
+      account_id: 1,
+    });
+    expect(rows()[0]!.paid_cents).toBe(300000);
+    expect(() =>
+      service.pay(1, id, { ...input, key: randomUUID(), amountCents: 250000 }, 'income'),
+    ).toThrow();
+    expect(() => service.pay(1, id, { ...input, key: randomUUID() }, 'expense')).toThrow();
+    service.pay(1, id, { ...input, key: randomUUID(), amountCents: 200000 }, 'income');
+    expect(rows()[0]!.paid_cents).toBe(500000);
+  });
+  it('rejects expense categories, credit accounts and financing kinds for income', () => {
+    expect(() => create({ direction: 'income', kind: 'recurring' })).toThrow();
+    expect(
+      commitmentSchema.safeParse({
+        direction: 'income',
+        kind: 'housing',
+        name: 'Inválida',
+        amountCents: 100,
+        installments: 1,
+        accountId: 1,
+        categoryId: 1,
+        firstDue: '2026-11-05',
+      }).success,
+    ).toBe(false);
+    salary();
+    expect(() =>
+      create({ direction: 'income', kind: 'recurring', categoryId: 3, accountId: 2 }),
+    ).toThrow();
+  });
+  it('preserves received amounts when adjusting the following salaries', () => {
+    const c = salary();
+    service.pay(
+      1,
+      rows()[0]!.id,
+      { amountCents: 500000, date: '2026-11-05', key: randomUUID() },
+      'income',
+    );
+    service.update(1, rows()[1]!.id, 550000, true);
+    expect(rows()[0]!.amount_cents).toBe(500000);
+    expect(rows()[1]!.amount_cents).toBe(550000);
+    service.stop(1, c.id);
+    expect(rows().filter((r) => !r.cancelled)).toHaveLength(1);
+  });
+  it('restores old custom backups as expenses and retains income direction in new backups', () => {
+    salary();
+    create();
+    const backup = exportBrazil(db, 1);
+    for (const row of backup.commitments ?? [])
+      if (row['direction'] === 'expense') delete row['direction'];
+    clearBrazil(db, 1);
+    restoreBrazil(
+      db,
+      1,
+      backup,
+      new Map([[1, 1]]),
+      new Map([
+        [1, 1],
+        [3, 3],
+      ]),
+      new Map(),
+      new Map(),
+    );
+    const directions = db.prepare('SELECT direction FROM commitments ORDER BY id').all();
+    expect(directions).toEqual([{ direction: 'income' }, { direction: 'expense' }]);
+    expect(db.pragma('foreign_key_check')).toEqual([]);
+  });
+});

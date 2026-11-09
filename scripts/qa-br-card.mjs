@@ -59,7 +59,7 @@ const send = (method, params = {}) =>
   });
 const evaluate = async (expression) => {
   const r = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
-  if (r.exceptionDetails) throw Error(r.exceptionDetails.text);
+  if (r.exceptionDetails) throw Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
   return r.result.value;
 };
 let token;
@@ -77,10 +77,9 @@ async function api(path, body) {
   return data.data ?? data;
 }
 async function click(text) {
-  await evaluate(
-    `(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===${JSON.stringify(text)});if(!b)throw Error('Button missing');b.click();})()`,
-  );
+  await until(()=>evaluate(`(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===${JSON.stringify(text)});if(!b||b.disabled)return false;b.click();return true;})()`),'button: '+text);
 }
+
 try {
   await until(async () => {
     const r = await fetch(base + '/api/v1/health');
@@ -118,6 +117,22 @@ try {
     firstDue: current,
     key: randomUUID(),
   });
+  for (const [name, amount, day] of [
+    ['Aluguel', 150000, '05'],
+    ['Internet', 12000, '10'],
+    ['Energia', 24000, '12'],
+    ['Consórcio', 85000, '20'],
+  ])
+    await api('/payables', {
+      name,
+      kind: 'recurring',
+      direction: 'expense',
+      accountId: bank.id,
+      categoryId: category.id,
+      amountCents: amount,
+      firstDue: current.slice(0, 8) + day,
+    });
+  const incomeCategory = (await api('/categories')).find((c) => c.type === 'Ingreso');
   chrome = spawn(
     process.env.CHROME_BIN ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
     [
@@ -175,10 +190,29 @@ try {
   await until(
     () =>
       evaluate(
-        `document.querySelector('.payables')&&document.body.innerText.includes('Cartão QA')&&!document.body.innerText.includes('Carregando…')`,
+        `document.querySelector('.payables-page')&&document.body.innerText.includes('Aluguel')&&!document.body.innerText.includes('Carregando…')`,
       ),
     'card page',
   );
+  await click('Nova receita');
+  await evaluate(
+    `(()=>{const set=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;for(const [id,value]of [['pay-name','Salário QA'],['pay-amount','5000'],['pay-due',${JSON.stringify(current.slice(0, 8) + '05')}]]){const el=document.getElementById(id);set.call(el,value);el.dispatchEvent(new Event('input',{bubbles:true}));}for(const [id,value]of [['pay-account',${JSON.stringify(String(bank.id))}],['pay-category',${JSON.stringify(String(incomeCategory.id))}]]){const el=document.getElementById(id);el.value=value;el.dispatchEvent(new Event('change',{bubbles:true}));}document.getElementById('pay-direction').closest('form').requestSubmit();})()`,
+  );
+  await until(async () => {
+    const rows = await api('/payables');
+    return rows.some((r) => r.name === 'Salário QA' && r.direction === 'income');
+  }, 'salary created in browser');
+  await until(
+    () => evaluate(`!document.querySelector('details.form-accordion[open]')`),
+    'income form saved',
+  );
+  await click('Registrar recebimento');
+  await evaluate(`document.querySelector('#payable-payment form').requestSubmit()`);
+  await until(async () => {
+    const rows = await api('/accounts');
+    return rows.find((a) => a.id === bank.id)?.calculatedBalance === 15000;
+  }, 'salary credited after confirmation');
+  await evaluate(`document.getElementById('tab-bills').click()`);
   await click('Compras e histórico');
   await until(() => evaluate(`document.body.innerText.includes('Celular QA')`), 'purchase details');
   await click('Estornar compra');
@@ -211,6 +245,7 @@ try {
     const rows = await api('/payables/bills');
     return rows.find((b) => b.due_date === current)?.paid_cents === 0;
   }, 'payment reversed');
+  await evaluate(`document.getElementById('tab-commitments').click();window.scrollTo(0,0)`);
   await wait(350);
   let shot = await send('Page.captureScreenshot', { format: 'png' });
   await writeFile(join(dir, 'normal-desktop.png'), Buffer.from(shot.data, 'base64'));
@@ -219,7 +254,7 @@ try {
   await until(
     () =>
       evaluate(
-        `document.querySelector('.cp-workspace')&&document.querySelector('.payables')&&document.body.innerText.includes('Cartão QA')`,
+        `document.querySelector('.cp-workspace')&&document.querySelector('.payables-page')&&document.body.innerText.includes('Aluguel')`,
       ),
     'cyberpunk card page',
   );
@@ -242,6 +277,7 @@ try {
     JSON.stringify({
       ok: true,
       checks: [
+        'monthly salary creation and receipt',
         'real browser refund',
         'real browser payment',
         'real browser undo payment',
@@ -253,6 +289,7 @@ try {
   );
 } catch (e) {
   console.error(e.message);
+  if(ws){try{const shot=await send('Page.captureScreenshot',{format:'png'});await writeFile(join(dir,'failure.png'),Buffer.from(shot.data,'base64'));await writeFile(join(dir,'failure.txt'),await evaluate('document.body.innerText'));console.error('Failure artifacts: '+dir);}catch{}}
   if (!token) console.error(serverLog.slice(-3000));
   process.exitCode = 1;
 } finally {

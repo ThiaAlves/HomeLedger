@@ -78,6 +78,7 @@ export function restoreBrazil(
       .filter((c) => c !== 'id');
     for (const row of rows) {
       const values = columns.map((col) => {
+        if (col === 'direction') return row[col] ?? 'expense';
         if (col === 'user_id') return userId;
         if (col === 'source_subscription_id') return null;
         if (col === 'payment_key' || col === 'event_key' || col === 'operation_key')

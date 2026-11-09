@@ -10,6 +10,7 @@
     id: string | number;
     name: string;
     amount: number;
+    direction?: string;
     daysRemaining: number;
     nextDate?: string;
     accountName?: string;
@@ -79,9 +80,9 @@
     try {
       const res = await apiGet<CalendarPayment[]>('/subscriptions/calendar');
       payments = Array.isArray(res) ? res : (res as any).items ?? [];
-      const [dues,bills]=await Promise.all([apiGet<{id:number;name:string;due_date:string;amount_cents:number;paid_cents:number;cancelled:number}[]>('/payables'),apiGet<{id:number;account_name:string;due_date:string;total_cents:number;paid_cents:number}[]>('/payables/bills')]);
+      const [dues,bills]=await Promise.all([apiGet<{id:number;name:string;due_date:string;amount_cents:number;paid_cents:number;cancelled:number;direction?:string}[]>('/payables'),apiGet<{id:number;account_name:string;due_date:string;total_cents:number;paid_cents:number}[]>('/payables/bills')]);
       const now=new Date();now.setHours(0,0,0,0);
-      for(const row of [...dues.filter(d=>!d.cancelled&&d.amount_cents>d.paid_cents).map(d=>({id:`due-${d.id}`,name:d.name,date:d.due_date,amount:(d.amount_cents-d.paid_cents)/100})),...bills.filter(b=>b.total_cents>b.paid_cents).map(b=>({id:`bill-${b.id}`,name:b.account_name,date:b.due_date,amount:(b.total_cents-b.paid_cents)/100}))])payments.push({id:row.id,name:row.name,nextDate:row.date,amount:row.amount,daysRemaining:Math.ceil((new Date(row.date+'T00:00:00').getTime()-now.getTime())/86400000)});
+      for(const row of [...dues.filter(d=>!d.cancelled&&d.amount_cents>d.paid_cents).map(d=>({id:`due-${d.id}`,name:d.name,direction:d.direction,date:d.due_date,amount:(d.amount_cents-d.paid_cents)/100})),...bills.filter(b=>b.total_cents>b.paid_cents).map(b=>({id:`bill-${b.id}`,name:b.account_name,direction:'expense',date:b.due_date,amount:(b.total_cents-b.paid_cents)/100}))])payments.push({id:row.id,name:row.name,nextDate:row.date,amount:row.amount,direction:row.direction,daysRemaining:Math.ceil((new Date(row.date+'T00:00:00').getTime()-now.getTime())/86400000)});
 
     } catch { error = $t('calendar.error_loading'); } finally { loading = false; }
   }
@@ -127,7 +128,7 @@
                 {#if paymentsOnDay[day]}
                   <div class="day-payments">
                     {#each paymentsOnDay[day].slice(0, 2) as p}
-                      <span class="day-dot" title="{p.name} - {formatCurrency(p.amount)}"></span>
+                      <span class="day-dot" class:income-dot={p.direction==='income'} title="{p.name} - {formatCurrency(p.amount)}"></span>
                     {/each}
                     {#if paymentsOnDay[day].length > 2}
                       <span class="day-more">+{paymentsOnDay[day].length - 2}</span>
@@ -152,7 +153,7 @@
                 <span class="ui-meta">{p.accountName ?? ''} · {p.cycle ?? ''}</span>
               </div>
               <div class="ui-right">
-                <span class="ui-amount">{formatCurrency(p.amount)}</span>
+                <span class="ui-amount" class:income-amount={p.direction==='income'}>{p.direction==='income'?'+ ':'− '}{formatCurrency(p.amount)}</span>
                 <span class="ui-days" class:urgent={p.daysRemaining <= 3}>{$t('calendar.days_short', { n: p.daysRemaining })}</span>
               </div>
             </div>
@@ -215,4 +216,5 @@
   @media (max-width: 768px) {
     .calendar-layout { grid-template-columns: 1fr; }
   }
+ .income-dot{background:var(--accent-green)!important}.income-amount{color:var(--accent-green)}
 </style>

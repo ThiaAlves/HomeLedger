@@ -8,6 +8,7 @@ export const calendarDate = z
   );
 export const commitmentSchema = z
   .object({
+    direction: z.enum(['expense', 'income']).default('expense'),
     name: z.string().trim().min(1).max(100),
     kind: z.enum(['once', 'recurring', 'installment', 'consortium', 'housing']),
     accountId: z.number().int().positive(),
@@ -29,6 +30,12 @@ export const commitmentSchema = z
       .default({}),
   })
   .superRefine((v, c) => {
+    if (v.direction === 'income' && !['once', 'recurring'].includes(v.kind))
+      c.addIssue({
+        code: 'custom',
+        message: 'Receitas permitem recebimento único ou recorrência mensal',
+        path: ['kind'],
+      });
     if (v.firstNumber > v.installments)
       c.addIssue({
         code: 'custom',

@@ -52,6 +52,8 @@
   let trends: TrendEntry[] = $state([]);
   let transfers: TransferData[] = $state([]);
   let budgets: { name: string; categories: { categoryId: number; allocated: number; spent: number; remaining: number }[]; totalAllocated: number; totalSpent: number; percentUsed: number }[] = $state([]);
+  let payablesDues: any[] = $state([]);
+  let payablesBills: any[] = $state([]);
 
   // Quick Transaction Modal
   let showQuickModal = $state(false);
@@ -181,6 +183,107 @@
   let expenseChange = $derived.by(() => {
     if (prevMonthExpenses === 0) return totalExpenses > 0 ? 100 : 0;
     return Math.round(((totalExpenses - prevMonthExpenses) / prevMonthExpenses) * 100);
+  });
+
+  // ── Contas a pagar e previsões do mês atual ──
+  const currentMonthIso = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+  let currentMonthDues = $derived(
+    payablesDues.filter((d: any) => !d.cancelled && d.direction !== 'income' && d.due_date && d.due_date.startsWith(currentMonthIso))
+  );
+  let currentMonthBills = $derived(
+    payablesBills.filter((b: any) => b.due_date && b.due_date.startsWith(currentMonthIso))
+  );
+
+  let payablesPlannedCents = $derived(
+    currentMonthDues.reduce((s: number, d: any) => s + (d.amount_cents ?? 0), 0) +
+    currentMonthBills.reduce((s: number, b: any) => s + (b.total_cents ?? 0), 0)
+  );
+  let payablesPaidCents = $derived(
+    currentMonthDues.reduce((s: number, d: any) => s + (d.paid_cents ?? 0), 0) +
+    currentMonthBills.reduce((s: number, b: any) => s + (b.paid_cents ?? 0), 0)
+  );
+  let payablesRemainingCents = $derived(
+    currentMonthDues.reduce((s: number, d: any) => s + Math.max(0, (d.amount_cents ?? 0) - (d.paid_cents ?? 0)), 0) +
+    currentMonthBills.reduce((s: number, b: any) => s + Math.max(0, (b.total_cents ?? 0) - (b.paid_cents ?? 0)), 0)
+  );
+
+  let payablesPlanned = $derived(payablesPlannedCents / 100);
+  let payablesPaid = $derived(payablesPaidCents / 100);
+  let payablesRemaining = $derived(payablesRemainingCents / 100);
+
+  // Total comprometido no mês: gastos realizados nas transações + contas a pagar pendentes deste mês
+  let totalCommittedExpenses = $derived(totalExpenses + payablesRemaining);
+
+  // Lista unificada de próximos pagamentos (assinaturas + parcelas + faturas)
+  const todayDateStr = new Date().toISOString().slice(0, 10);
+  let combinedUpcoming = $derived.by(() => {
+    const list: Array<{
+      id: string;
+      name: string;
+      amount: number;
+      categoryName?: string;
+      daysRemaining: number;
+      isLate: boolean;
+      url: string;
+      isSubscription: boolean;
+      rawSub?: SubscriptionCalendar;
+    }> = [];
+
+    // Assinaturas ativas do calendário
+    for (const sub of calendar) {
+      list.push({
+        id: 'sub-' + sub.id,
+        name: sub.name,
+        amount: sub.amount,
+        categoryName: sub.categoryName,
+        daysRemaining: sub.daysRemaining,
+        isLate: sub.daysRemaining < 0,
+        url: '/suscripciones',
+        isSubscription: true,
+        rawSub: sub,
+      });
+    }
+
+    // Contas e parcelas em aberto
+    for (const d of payablesDues) {
+      if (d.cancelled || d.direction === 'income') continue;
+      const remCents = Math.max(0, (d.amount_cents ?? 0) - (d.paid_cents ?? 0));
+      if (remCents <= 0) continue;
+      const days = Math.round((new Date(d.due_date + 'T00:00:00').getTime() - new Date(todayDateStr + 'T00:00:00').getTime()) / (1000 * 3600 * 24));
+      if (days <= 35) {
+        list.push({
+          id: 'due-' + d.id,
+          name: d.name + (d.total_installments > 1 ? ` (${d.number}/${d.total_installments})` : ''),
+          amount: remCents / 100,
+          categoryName: accounts.find(a => a.id === d.account_id)?.name ?? 'Conta a pagar',
+          daysRemaining: days,
+          isLate: days < 0,
+          url: '/contas-a-pagar',
+          isSubscription: false,
+        });
+      }
+    }
+
+    // Faturas de cartão com saldo
+    for (const b of payablesBills) {
+      const remCents = Math.max(0, (b.total_cents ?? 0) - (b.paid_cents ?? 0));
+      if (remCents <= 0) continue;
+      const days = Math.round((new Date(b.due_date + 'T00:00:00').getTime() - new Date(todayDateStr + 'T00:00:00').getTime()) / (1000 * 3600 * 24));
+      if (days <= 35) {
+        list.push({
+          id: 'bill-' + b.id,
+          name: `Fatura ${b.account_name}`,
+          amount: remCents / 100,
+          categoryName: 'Cartão de crédito',
+          daysRemaining: days,
+          isLate: days < 0,
+          url: '/contas-a-pagar',
+          isSubscription: false,
+        });
+      }
+    }
+
+    return list.sort((a, b) => a.daysRemaining - b.daysRemaining);
   });
 
   let filteredCategories = $derived(
@@ -560,7 +663,7 @@
   // ─── Data Loading ───
   async function loadAll() {
     try {
-      const [dashRes, accRes, txRes, calRes, catRes, goalRes, catsRes, trendsRes, transfersRes, budgetsRes, alertsRes] = await Promise.allSettled([
+      const [dashRes, accRes, txRes, calRes, catRes, goalRes, catsRes, trendsRes, transfersRes, budgetsRes, alertsRes, duesRes, billsRes] = await Promise.allSettled([
         apiGet<DashboardData>('/reports/dashboard'),
         apiGet<AccountData[]>('/accounts'),
         allTransactions(),
@@ -572,6 +675,8 @@
         apiGet<TransferData[]>('/transfers'),
         apiGet<any[]>('/budgets'),
         listAlerts(),
+        apiGet<any[]>('/payables'),
+        apiGet<any[]>('/payables/bills'),
       ]);
       if (dashRes.status === 'fulfilled') dashboard = dashRes.value;
       if (alertsRes.status === 'fulfilled') dashboardAlerts = alertsRes.value.filter(row=>!row.isRead);
@@ -584,14 +689,22 @@
       if (trendsRes.status === 'fulfilled') { const raw = trendsRes.value as any; trends = raw?.entries ?? (Array.isArray(raw) ? raw : []); }
       if (transfersRes.status === 'fulfilled') { const raw = transfersRes.value; transfers = Array.isArray(raw) ? raw : (raw as any).data ?? (raw as any).items ?? []; }
       if (budgetsRes.status === 'fulfilled') { const raw = budgetsRes.value; budgets = Array.isArray(raw) ? raw : (raw as any).data ?? []; }
+      if (duesRes.status === 'fulfilled') payablesDues = Array.isArray(duesRes.value) ? duesRes.value : [];
+      if (billsRes.status === 'fulfilled') payablesBills = Array.isArray(billsRes.value) ? billsRes.value : [];
     } catch {} finally { loading = false; }
   }
 
-  onMount(() => { loadAll(); });
+  onMount(() => {
+    loadAll();
+    const onDataChanged = () => { void loadAll(); };
+    window.addEventListener('homeledger:data-changed', onDataChanged);
+    return () => {
+      window.removeEventListener('homeledger:data-changed', onDataChanged);
+    };
+  });
 </script>
 
 <svelte:head><title>{$t('nav.dashboard')} - HomeLedger</title></svelte:head>
-<PayablesSummary />
 
 <svelte:window onkeydown={handleKeydown} />
 
@@ -641,10 +754,35 @@
       <div class="sc-content">
         <span class="sc-label">{$t('dashboard.expenses_month')}</span>
         <span class="sc-value sc-red">{formatCurrency(totalExpenses)}</span>
-        <span class="sc-meta {expenseChange <= 0 ? 'sc-positive' : 'sc-negative'}">{expenseChange >= 0 ? '↑' : '↓'} {Math.abs(expenseChange)}% {$t('dashboard.vs_prev_month')}</span>
+        {#if payablesRemaining > 0}
+          <span class="sc-meta sc-orange" title="Despesas pagas + contas pendentes do mês">
+            {$t('dashboard.committed_expenses')}: {formatCurrency(totalCommittedExpenses)}
+          </span>
+        {:else}
+          <span class="sc-meta {expenseChange <= 0 ? 'sc-positive' : 'sc-negative'}">{expenseChange >= 0 ? '↑' : '↓'} {Math.abs(expenseChange)}% {$t('dashboard.vs_prev_month')}</span>
+        {/if}
       </div>
       <span class="sc-icon red"><Icon name="trending-down" size={20} /></span>
     </div>
+
+    <!-- NOVO CARD: CONTAS A PAGAR DO MÊS -->
+    <a href="/contas-a-pagar" class="summary-card summary-card-link" title={$t('dashboard.payables_tooltip')}>
+      <div class="sc-content">
+        <span class="sc-label">{$t('dashboard.payables_month')}</span>
+        <span class="sc-value {payablesRemaining > 0 ? 'sc-orange' : 'sc-green'}">{formatCurrency(payablesRemaining)}</span>
+        <span class="sc-meta">
+          {#if payablesRemaining > 0}
+            {$t('payables.planned')}: {formatCurrency(payablesPlanned)} · {$t('payables.paid')}: {formatCurrency(payablesPaid)}
+          {:else if payablesPlanned > 0}
+            ✓ 100% {$t('payables.paid')}!
+          {:else}
+            Sem contas no mês
+          {/if}
+        </span>
+      </div>
+      <span class="sc-icon orange"><Icon name="calendar" size={20} /></span>
+    </a>
+
     <div class="summary-card" title={$t('dashboard.budget_tooltip')}>
       <div class="sc-content">
         <span class="sc-label">{$t('dashboard.budget_remaining')}</span>
@@ -660,6 +798,8 @@
       </div>
     </div>
   </section>
+
+  <PayablesSummary />
 
   <!-- MAIN 3-COLUMN GRID -->
   <div class="main-grid">
@@ -678,26 +818,43 @@
         </div>
       </div>
 
-      <!-- Próximos pagos -->
+      <!-- Próximos pagos (Assinaturas + Contas a Pagar + Faturas) -->
       <div class="card">
         <div class="card-header">
           <h3 class="card-title"><Icon name="calendar" size={14} /> {$t('dashboard.upcoming_payments')}</h3>
-          <a href="/calendario" class="card-link">{$t('dashboard.view_calendar')}</a>
+          <a href="/contas-a-pagar" class="card-link">{$t('dashboard.view_payables')}</a>
         </div>
         <div class="payments-list">
-          {#each calendar.slice(0, 4) as sub (sub.id)}
-            <button class="payment-item" type="button" onclick={() => openSubDetail(sub)} title={$t('dashboard.view_details')}>
-              <span class="pi-icon"><Icon name="repeat" size={12} /></span>
-              <span class="pi-name">{sub.name}</span>
-              {#if sub.categoryName}<span class="pi-cat">{sub.categoryName}</span>{/if}
-              <span class="days-badge" class:days-urgent={sub.daysRemaining <= 3}>{$t('days.n', { n: sub.daysRemaining })}</span>
-              <span class="pi-amount">{formatCurrency(sub.amount)}</span>
-            </button>
+          {#each combinedUpcoming.slice(0, 5) as item (item.id)}
+            {#if item.isSubscription && item.rawSub}
+              <button class="payment-item" type="button" onclick={() => openSubDetail(item.rawSub!)} title={$t('dashboard.view_details')}>
+                <span class="pi-icon"><Icon name="repeat" size={12} /></span>
+                <span class="pi-name">{item.name}</span>
+                {#if item.categoryName}<span class="pi-cat">{item.categoryName}</span>{/if}
+                <span class="days-badge" class:days-urgent={item.daysRemaining <= 3} class:days-late={item.isLate}>
+                  {item.isLate ? 'Atrasado' : $t('days.n', { n: Math.max(0, item.daysRemaining) })}
+                </span>
+                <span class="pi-amount">{formatCurrency(item.amount)}</span>
+              </button>
+            {:else}
+              <a class="payment-item payment-link" href={item.url} title="Ver em Contas a pagar">
+                <span class="pi-icon"><Icon name="credit-card" size={12} /></span>
+                <span class="pi-name">{item.name}</span>
+                {#if item.categoryName}<span class="pi-cat">{item.categoryName}</span>{/if}
+                <span class="days-badge" class:days-urgent={item.daysRemaining <= 3} class:days-late={item.isLate}>
+                  {item.isLate ? 'Atrasado' : item.daysRemaining === 0 ? 'Hoje' : $t('days.n', { n: item.daysRemaining })}
+                </span>
+                <span class="pi-amount sc-orange">{formatCurrency(item.amount)}</span>
+              </a>
+            {/if}
           {:else}
             <p class="empty-text">{$t('dashboard.no_upcoming')}</p>
           {/each}
         </div>
-        <a href="/suscripciones" class="card-link-sm">{$t('dashboard.view_all')}</a>
+        <div class="card-links-row">
+          <a href="/contas-a-pagar" class="card-link-sm">{$t('payables.title')} →</a>
+          <a href="/calendario" class="card-link-sm">{$t('dashboard.view_calendar')}</a>
+        </div>
       </div>
 
       <!-- Alertas importantes -->
@@ -1324,8 +1481,10 @@
   .date-range { font-size: 0.72rem; color: var(--text-secondary); background: var(--bg-elevated); padding: 0.35rem 0.75rem; border-radius: var(--radius-md); border: 1px solid var(--border-default); }
 
   /* SUMMARY CARDS */
-  .summary-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.75rem; }
-  .summary-card { background: var(--bg-card); border: 1px solid var(--border-default); border-radius: var(--radius-lg); padding: 1rem; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+  .summary-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 0.75rem; }
+  .summary-card { background: var(--bg-card); border: 1px solid var(--border-default); border-radius: var(--radius-lg); padding: 1rem; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; text-decoration: none; color: inherit; }
+  .summary-card-link { cursor: pointer; transition: transform 0.15s, border-color 0.15s; }
+  .summary-card-link:hover { border-color: var(--accent-blue); transform: translateY(-1px); }
   .sc-content { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
   .sc-label { font-size: 0.65rem; font-weight: 500; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
   .sc-icon { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
@@ -1333,12 +1492,18 @@
   .sc-icon.teal { background: rgba(20, 184, 166, 0.15); color: #14b8a6; }
   .sc-icon.green { background: rgba(34, 197, 94, 0.15); color: #22c55e; }
   .sc-icon.red { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
+  .sc-icon.orange { background: rgba(245, 158, 11, 0.15); color: #f59e0b; }
   .sc-value { font-size: 1.2rem; font-weight: 700; color: var(--text-primary); }
   .sc-value.sc-green { color: var(--accent-green); }
   .sc-value.sc-red { color: var(--accent-red); }
+  .sc-value.sc-orange { color: #f59e0b; }
   .sc-meta { font-size: 0.6rem; color: var(--text-muted); }
   .sc-positive { color: var(--accent-green); }
   .sc-negative { color: var(--accent-red); }
+  .sc-orange { color: #f59e0b; }
+  .card-links-row { display: flex; justify-content: space-between; gap: 0.5rem; margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--border-default); }
+  .card-links-row .card-link-sm { margin-top: 0; padding-top: 0; border-top: none; }
+  .days-badge.days-late { background: rgba(239, 68, 68, 0.2); color: var(--accent-red); font-weight: 700; }
   .pct-ring-circle { width: 44px; height: 44px; position: relative; flex-shrink: 0; }
   .pct-ring-circle svg { width: 100%; height: 100%; transform: rotate(-90deg); }
   .ring-bg { fill: none; stroke: var(--bg-hover); stroke-width: 3; }

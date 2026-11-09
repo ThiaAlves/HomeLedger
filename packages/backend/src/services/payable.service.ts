@@ -28,6 +28,7 @@ interface Commitment {
   category_id: number;
   name: string;
   kind: string;
+  direction: 'expense' | 'income';
   amount_cents: number;
   total_installments: number;
   first_number: number;
@@ -84,15 +85,18 @@ export class PayableService {
         throw new PayableError(
           'Use uma conta bancária ou dinheiro para contas a pagar. Compras no cartão serão controladas pelas faturas.',
         );
+      const category = this.db
+        .prepare('SELECT type FROM categories WHERE id=? AND user_id=?')
+        .get(input.categoryId, userId) as { type: string } | undefined;
+      if (!category) throw new PayableError('Categoria não encontrada');
       if (
-        !this.db
-          .prepare('SELECT id FROM categories WHERE id=? AND user_id=?')
-          .get(input.categoryId, userId)
+        (input.direction === 'income' && category.type === 'Gasto') ||
+        (input.direction === 'expense' && category.type === 'Ingreso')
       )
-        throw new PayableError('Categoria não encontrada');
+        throw new PayableError('A categoria deve corresponder ao tipo de movimentação');
       const result = this.db
         .prepare(
-          `INSERT INTO commitments(user_id,account_id,category_id,name,kind,amount_cents,total_installments,first_number,first_due,details,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+          `INSERT INTO commitments(user_id,account_id,category_id,name,kind,amount_cents,total_installments,first_number,first_due,details,created_at,direction) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
         )
         .run(
           userId,
@@ -106,6 +110,7 @@ export class PayableService {
           input.firstDue,
           JSON.stringify(input.details),
           new Date().toISOString(),
+          input.direction,
         );
       const c = this.commitment(userId, Number(result.lastInsertRowid));
       this.extend(c, c.kind === 'recurring' ? c.first_number + 23 : c.total_installments);
@@ -132,14 +137,21 @@ export class PayableService {
     })();
     return this.db
       .prepare(
-        `SELECT i.*,c.name,c.kind,c.total_installments,c.account_id,c.category_id,c.details,a.name account_name, COALESCE((SELECT SUM(p.amount_cents) FROM payable_payments p WHERE p.installment_id=i.id),0) paid_cents FROM payable_installments i JOIN commitments c ON c.id=i.commitment_id JOIN accounts a ON a.id=c.account_id WHERE c.user_id=? ORDER BY i.due_date,i.id`,
+        `SELECT i.*,c.name,c.kind,c.direction,c.total_installments,c.account_id,c.category_id,c.details,a.name account_name, COALESCE((SELECT SUM(p.amount_cents) FROM payable_payments p WHERE p.installment_id=i.id),0) paid_cents FROM payable_installments i JOIN commitments c ON c.id=i.commitment_id JOIN accounts a ON a.id=c.account_id WHERE c.user_id=? ORDER BY i.due_date,i.id`,
       )
       .all(userId);
   }
-  pay(userId: number, id: number, input: { amountCents: number; date: string; key: string }) {
+  pay(
+    userId: number,
+    id: number,
+    input: { amountCents: number; date: string; key: string },
+    expectedDirection?: 'income' | 'expense',
+  ) {
     return this.db.transaction(() => {
       const due = this.due(userId, id);
       const c = this.commitment(userId, due.commitment_id);
+      if (expectedDirection && c.direction !== expectedDirection)
+        throw new PayableError('Operação incompatível com o tipo do compromisso');
       const previous = this.db
         .prepare('SELECT * FROM payable_payments WHERE payment_key=?')
         .get(input.key) as
@@ -158,7 +170,7 @@ export class PayableService {
       const now = new Date().toISOString();
       const tx = this.db
         .prepare(
-          `INSERT INTO transactions(user_id,account_id,category_id,name,amount,type,date,created_at,updated_at) VALUES(?,?,?,?,?,'Gasto',?,?,?)`,
+          `INSERT INTO transactions(user_id,account_id,category_id,name,amount,type,date,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`,
         )
         .run(
           userId,
@@ -166,6 +178,7 @@ export class PayableService {
           c.category_id,
           `${c.name} — ${due.number}`,
           input.amountCents / 100,
+          c.direction === 'income' ? 'Ingreso' : 'Gasto',
           input.date,
           now,
           now,
@@ -238,6 +251,7 @@ export class PayableService {
         accountId: sub.account_id,
         categoryId: sub.category_id,
         kind: 'recurring',
+        direction: 'expense',
         amountCents: Math.round(sub.amount * 100),
         installments: 1,
         firstNumber: 1,

@@ -6,7 +6,7 @@ Branch custom: `custom/br-finances`, destinada ao fork `ThiaAlves/HomeLedger` (r
 
 1. Configure idioma Português (Brasil) e moeda BRL em Configurações.
 2. Cadastre suas contas bancárias e cartões em Contas. No cartão, informe limite, fechamento e vencimento.
-3. Abra **Contas a pagar**, disponível nos dois temas.
+3. Abra **Contas e receitas**, disponível nos dois temas.
 4. Em **Adicionar gasto**, escolha o tipo, conta, categoria e próximo vencimento.
 
 | Tipo | Valor informado | Funcionamento |
@@ -19,6 +19,16 @@ Branch custom: `custom/br-finances`, destinada ao fork `ThiaAlves/HomeLedger` (r
 | Compra no cartão | Total original da compra | Distribui parcelas por fatura e compromete o limite pelo saldo das parcelas cadastradas. |
 
 Para contratos e compras já em andamento, informe a quantidade **total original**, o número da primeira parcela ainda a acompanhar e seu vencimento. Por exemplo: 80 parcelas, começar na 18, vencimento de dezembro. As 17 anteriores não criam transações.
+
+## Receitas recorrentes e salário
+
+Em **Contas e receitas → Nova receita**, informe descrição (por exemplo, Salário), valor previsto, primeiro recebimento, conta de destino e uma categoria de receita. A opção mensal gera previsões contínuas. Também é possível cadastrar um recebimento único.
+
+O cadastro não aumenta o saldo bancário. Na aba **Receitas**, use **Registrar recebimento** quando o dinheiro entrar, ajustando data e valor se necessário. O sistema cria uma receita na conta selecionada, permite recebimentos parciais e evita duplicação ao repetir a mesma requisição. Reajustes nas previsões futuras preservam os recebimentos anteriores.
+
+A tela separa **Despesas**, **Receitas** e **Faturas** em abas reais. A lista compacta mostra descrição, categoria, vencimento, conta e valor. Os atrasados aparecem primeiro; a busca, os filtros de conta/situação e a ordenação ajudam a localizar itens. Ações de editar, cancelar e encerrar ficam em **Mais opções**. Os totais separam receitas previstas, recebidas e despesas, sem tratar salário futuro como dinheiro já disponível.
+
+O painel e o calendário identificam receitas sem somá-las às despesas previstas. A migração aditiva `0020_recurring_income` mantém os compromissos existentes como despesas. Backups anteriores à receita recorrente continuam aceitos.
 
 ## Pagamentos e ajustes
 
@@ -89,7 +99,7 @@ Validação: typecheck backend/frontend, suíte Vitest backend/frontend, build e
 
 Use Node 24.16.0. A validação inclui typecheck backend/frontend, testes backend/shared e frontend, build e lint. Os testes cobrem migrações reais em SQLite, centavos, datas, contratos em andamento, pagamentos parciais, repetição de requisições, isolamento por usuário, faturas, estornos parciais após pagamento, reversão de pagamento, antecipação com desconto, saldos transferidos, conversão de assinaturas, backup e os formulários principais.
 
-Resultado final com Node 24.16.0: **779 testes backend/shared e 156 testes frontend aprovados**, typecheck backend/frontend e build aprovados, lint sem erros e com os 80 avisos preexistentes.
+Resultado final com Node 24.16.0: **784 testes backend/shared e 159 testes frontend aprovados**, typecheck backend/frontend e build aprovados, lint sem erros e com os 80 avisos preexistentes.
 
 Também foi executado o Chrome headless com servidor e banco temporários: estorno parcial, pagamento, desfazer pagamento e atualização do histórico pela interface; tema Normal e Cyberpunk; tela móvel de 390 px sem rolagem horizontal. O roteiro reproduzível está em `scripts/qa-br-card.mjs` e pode ser executado após `npm run build`:
 
@@ -98,3 +108,5 @@ node scripts/qa-br-card.mjs
 ```
 
 O roteiro usa o Chrome instalado no macOS por padrão. Em outro ambiente, defina `CHROME_BIN` com o caminho do executável. Os dados e capturas são temporários, sem usar o banco real nem publicar conteúdo.
+
+A revisão de receitas recorrentes também foi conferida no Chrome: cadastro de salário mensal e confirmação do recebimento pela interface, com aumento correto do saldo bancário. A lista compacta e as abas foram revisadas nos dois temas e em tela móvel, preservando os ajustes visuais existentes.

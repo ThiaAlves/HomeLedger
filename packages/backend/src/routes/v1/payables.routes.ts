@@ -170,6 +170,16 @@ export async function payableRoutes(app: FastifyInstance) {
       request.user!.userId,
       params.parse(request.params).id,
       payablePaymentSchema.parse(request.body),
+      'expense',
+    ),
+  }));
+  app.post('/:id/receive', async (request) => ({
+    success: true,
+    data: service.pay(
+      request.user!.userId,
+      params.parse(request.params).id,
+      payablePaymentSchema.parse(request.body),
+      'income',
     ),
   }));
   app.patch('/:id', async (request) => {

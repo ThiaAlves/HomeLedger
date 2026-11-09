@@ -141,6 +141,13 @@
       "when": 1787697800000,
       "tag": "0019_card_workflow",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1787697900000,
+      "tag": "0020_recurring_income",
+      "breakpoints": true
     }
   ]
 }

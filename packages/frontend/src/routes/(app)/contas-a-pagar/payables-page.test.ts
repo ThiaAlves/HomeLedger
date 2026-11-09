@@ -32,6 +32,7 @@ beforeEach(() => {
 describe('Brazilian expense registration', () => {
   it('saves a finite installment series in cents with no payment request', async () => {
     const { container } = render(Page);
+    await fireEvent.click(screen.getByRole('button',{name:/Adicionar gasto/}));
     await screen.findByRole('option', { name: 'Banco (BRL)' });
     await fireEvent.change(screen.getByLabelText('Tipo de gasto'), {
       target: { value: 'installment' },
@@ -64,6 +65,7 @@ describe('Brazilian expense registration', () => {
   });
   it('suggests a first card statement and supports an ongoing purchase', async () => {
     const { container } = render(Page);
+    await fireEvent.click(screen.getByRole('button',{name:/Adicionar gasto/}));
     await screen.findByRole('option', { name: 'Banco (BRL)' });
     await fireEvent.change(screen.getByLabelText('Tipo de gasto'), { target: { value: 'card' } });
     await fireEvent.input(screen.getByLabelText('Descrição'), {
@@ -121,6 +123,7 @@ describe('Brazilian expense registration', () => {
       ),
     );
     render(Page);
+    await fireEvent.click(await screen.findByRole('tab', { name: /Faturas|Cartões/i }));
     await fireEvent.click(await screen.findByRole('button', { name: 'Registrar pagamento' }));
     const section = screen.getByRole('region', { name: 'Registrar pagamento' });
     await fireEvent.change(within(section).getByLabelText('Conta de pagamento / cartão'), {
@@ -138,5 +141,135 @@ describe('Brazilian expense registration', () => {
       ),
     );
     expect(post).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('income and organized expense list', () => {
+  it('creates a monthly salary with an income category and receiving account', async () => {
+    get.mockImplementation((path: string) =>
+      Promise.resolve(
+        path === '/accounts'
+          ? [{ id: 1, name: 'Banco', type: 'Débito', currency: 'BRL' }]
+          : path === '/categories'
+            ? [
+                { id: 1, name: 'Casa', type: 'Gasto' },
+                { id: 3, name: 'Salário', type: 'Ingreso' },
+              ]
+            : [],
+      ),
+    );
+    const { container } = render(Page);
+    await fireEvent.click(screen.getByRole('button', { name: 'Nova receita' }));
+    await screen.findByRole('option', { name: 'Banco (BRL)' });
+    await fireEvent.input(screen.getByLabelText('Descrição'), { target: { value: 'Meu salário' } });
+    await fireEvent.input(screen.getByLabelText('Valor previsto'), { target: { value: '5000' } });
+    await fireEvent.change(screen.getByLabelText('Conta de recebimento'), {
+      target: { value: '1' },
+    });
+    await fireEvent.change(screen.getByLabelText('Categoria'), { target: { value: '3' } });
+    await fireEvent.submit(container.querySelector('form')!);
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith(
+        '/payables',
+        expect.objectContaining({
+          direction: 'income',
+          kind: 'recurring',
+          amountCents: 500000,
+          categoryId: 3,
+        }),
+      ),
+    );
+  });
+  it('separates salary from expenses and confirms receipt through its own endpoint', async () => {
+    const month = new Date().toISOString().slice(0, 7);
+    get.mockImplementation((path: string) =>
+      Promise.resolve(
+        path === '/payables'
+          ? [
+              {
+                id: 51,
+                commitment_id: 1,
+                name: 'Salário do mês',
+                direction: 'income',
+                kind: 'recurring',
+                number: 1,
+                total_installments: 1,
+                due_date: month + '-05',
+                amount_cents: 500000,
+                paid_cents: 0,
+                cancelled: 0,
+                account_id: 1,
+                category_id: 3,
+              },
+              {
+                id: 52,
+                commitment_id: 2,
+                name: 'Conta de luz',
+                direction: 'expense',
+                kind: 'recurring',
+                number: 1,
+                total_installments: 1,
+                due_date: month + '-10',
+                amount_cents: 10000,
+                paid_cents: 0,
+                cancelled: 0,
+                account_id: 1,
+                category_id: 1,
+              },
+            ]
+          : path === '/accounts'
+            ? [{ id: 1, name: 'Banco', type: 'Débito', currency: 'BRL' }]
+            : [],
+      ),
+    );
+    render(Page);
+    await screen.findByRole('heading', { name: 'Conta de luz' });
+    expect(screen.queryByRole('heading', { name: 'Salário do mês' })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('tab', { name: /^Receitas/ }));
+    await screen.findByRole('heading', { name: 'Salário do mês' });
+    expect(screen.queryByRole('heading', { name: 'Conta de luz' })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Registrar recebimento' }));
+    const region = screen.getByRole('region', { name: 'Registrar recebimento' });
+    await fireEvent.submit(region.querySelector('form')!);
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith(
+        '/payables/51/receive',
+        expect.objectContaining({ amountCents: 500000, key: expect.any(String) }),
+      ),
+    );
+  });
+  it('searches expenses and keeps secondary actions collapsed', async () => {
+    const month = new Date().toISOString().slice(0, 7);
+    get.mockImplementation((path: string) =>
+      Promise.resolve(
+        path === '/payables'
+          ? ['Aluguel', 'Internet'].map((name, i) => ({
+              id: i + 1,
+              commitment_id: i + 1,
+              name,
+              direction: 'expense',
+              kind: 'recurring',
+              number: 1,
+              total_installments: 1,
+              due_date: month + '-10',
+              amount_cents: 10000,
+              paid_cents: 0,
+              cancelled: 0,
+              account_id: 1,
+              category_id: 1,
+            }))
+          : [],
+      ),
+    );
+    render(Page);
+    await screen.findByRole('heading', { name: 'Aluguel' });
+    expect(
+      [...document.querySelectorAll<HTMLDetailsElement>('details.row-more')].every((d) => !d.open),
+    ).toBe(true);
+    await fireEvent.input(screen.getByLabelText('Buscar por descrição ou categoria'), {
+      target: { value: 'Internet' },
+    });
+    expect(screen.queryByRole('heading', { name: 'Aluguel' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Internet' })).toBeInTheDocument();
   });
 });
