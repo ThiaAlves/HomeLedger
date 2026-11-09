@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PayablesSummary from '$lib/components/PayablesSummary.svelte';
   import { listAlerts, type AlertData } from '$lib/api/alerts';
   import { getAlertTitle, getAlertMessage } from '$lib/utils/alert-copy';
   let dashboardAlerts = $state<AlertData[]>([]);
@@ -590,6 +591,8 @@
 </script>
 
 <svelte:head><title>{$t('nav.dashboard')} - HomeLedger</title></svelte:head>
+<PayablesSummary />
+
 <svelte:window onkeydown={handleKeydown} />
 
 {#if loading}

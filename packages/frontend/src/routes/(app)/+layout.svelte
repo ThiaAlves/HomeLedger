@@ -69,6 +69,7 @@
         { href: '/cuentas', label: $t('nav.accounts'), icon: 'building' },
         { href: '/transacciones', label: $t('nav.transactions'), icon: 'coins' },
         { href: '/transferencias', label: $t('nav.transfers'), icon: 'arrow-left-right' },
+        { href: '/contas-a-pagar', label: $t('payables.title'), icon: 'calendar' },
         { href: '/suscripciones', label: $t('nav.subscriptions'), icon: 'repeat' },
       ],
     },

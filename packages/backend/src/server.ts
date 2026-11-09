@@ -30,6 +30,7 @@ import { rulesRoutes } from './routes/v1/rules.routes.js';
 import { importRoutes } from './routes/v1/imports.routes.js';
 import { reportRoutes } from './routes/v1/reports.routes.js';
 import { backupRoutes } from './routes/v1/backup.routes.js';
+import { payableRoutes } from './routes/v1/payables.routes.js';
 import { loanRoutes } from './routes/v1/loans.routes.js';
 import { alertRoutes } from './routes/v1/alerts.routes.js';
 import { haRoutes } from './routes/v1/ha.routes.js';
@@ -115,6 +116,7 @@ export async function buildApp(runtime: { desktopToken?: string; requireFrontend
   await app.register(importRoutes, { prefix: '/api/v1/imports' });
   await app.register(reportRoutes, { prefix: '/api/v1/reports' });
   await app.register(backupRoutes, { prefix: '/api/v1/backup' });
+  await app.register(payableRoutes, { prefix: '/api/v1/payables' });
   await app.register(loanRoutes, { prefix: '/api/v1/loans' });
   await app.register(alertRoutes, { prefix: '/api/v1/alerts' });
   await app.register(haRoutes, { prefix: '/api/v1/ha' });

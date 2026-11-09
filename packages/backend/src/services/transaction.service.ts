@@ -1,3 +1,4 @@
+import { isManagedEntry } from './managed-entry.js';
 import { eq, and, desc, gte, lte, count, inArray } from 'drizzle-orm';
 import { getDb, getSqlite } from '../db/connection.js';
 import { transactions, transactionSplits, transactionTags, transactionAudit, accounts, categories, subcategories } from '../db/schema.js';
@@ -202,6 +203,7 @@ export class TransactionService {
   static update(id: number, userId: number, input: UpdateTransactionSchema) {
     const db = getDb();
     const sqlite = getSqlite();
+    if (isManagedEntry(sqlite,id,false)) throw new TransactionError('Use Contas a pagar para alterar um lançamento vinculado a parcela ou fatura', 'MANAGED_ENTRY');
 
     // Get the existing transaction
     const existing = db
@@ -313,6 +315,7 @@ export class TransactionService {
   static delete(id: number, userId: number): void {
     const db = getDb();
     const sqlite = getSqlite();
+    if (isManagedEntry(sqlite,id,false)) throw new TransactionError('Use Contas a pagar para alterar um lançamento vinculado a parcela ou fatura', 'MANAGED_ENTRY');
 
     // Get the existing transaction
     const existing = db

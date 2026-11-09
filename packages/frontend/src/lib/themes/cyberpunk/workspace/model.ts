@@ -13,6 +13,7 @@ export function rows(value: unknown): Row[] {
 }
 
 export const routes = [
+  ['contas-a-pagar', 'payables.title', 'calendar', 'payables.description'],
   ['dashboard', 'nav.dashboard', 'layout-dashboard', 'cyberpunk.route_dashboard_description'],
   ['cuentas', 'nav.accounts', 'building', 'cyberpunk.route_cuentas_description'],
   ['transacciones', 'nav.transactions', 'coins', 'cyberpunk.route_transacciones_description'],

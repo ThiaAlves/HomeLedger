@@ -7,7 +7,7 @@
   import { preferences } from '$lib/stores/preferences';
 
   interface CalendarPayment {
-    id: number;
+    id: string | number;
     name: string;
     amount: number;
     daysRemaining: number;
@@ -46,7 +46,7 @@
     const map: Record<number, CalendarPayment[]> = {};
     for (const p of payments) {
       if (!p.nextDate) continue;
-      const d = new Date(p.nextDate);
+      const d = new Date(p.nextDate+'T12:00:00');
       if (d.getMonth() === currentMonth && d.getFullYear() === currentYear) {
         const day = d.getDate();
         if (!map[day]) map[day] = [];
@@ -79,6 +79,10 @@
     try {
       const res = await apiGet<CalendarPayment[]>('/subscriptions/calendar');
       payments = Array.isArray(res) ? res : (res as any).items ?? [];
+      const [dues,bills]=await Promise.all([apiGet<{id:number;name:string;due_date:string;amount_cents:number;paid_cents:number;cancelled:number}[]>('/payables'),apiGet<{id:number;account_name:string;due_date:string;total_cents:number;paid_cents:number}[]>('/payables/bills')]);
+      const now=new Date();now.setHours(0,0,0,0);
+      for(const row of [...dues.filter(d=>!d.cancelled&&d.amount_cents>d.paid_cents).map(d=>({id:`due-${d.id}`,name:d.name,date:d.due_date,amount:(d.amount_cents-d.paid_cents)/100})),...bills.filter(b=>b.total_cents>b.paid_cents).map(b=>({id:`bill-${b.id}`,name:b.account_name,date:b.due_date,amount:(b.total_cents-b.paid_cents)/100}))])payments.push({id:row.id,name:row.name,nextDate:row.date,amount:row.amount,daysRemaining:Math.ceil((new Date(row.date+'T00:00:00').getTime()-now.getTime())/86400000)});
+
     } catch { error = $t('calendar.error_loading'); } finally { loading = false; }
   }
 
@@ -138,6 +142,7 @@
 
       <!-- Upcoming Payments -->
       <div class="upcoming-card">
+        <a href="/contas-a-pagar">{$t('payables.title')} →</a>
         <h3 class="card-title">{$t('calendar.upcoming_title')}</h3>
         <div class="upcoming-list">
           {#each upcomingPayments as p (p.id)}

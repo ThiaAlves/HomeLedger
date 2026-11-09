@@ -1,3 +1,4 @@
+import { exportBrazil, clearBrazil, restoreBrazil, type BrazilBackup } from './brazil-backup.js';
 import { eq, and } from 'drizzle-orm';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -64,6 +65,7 @@ export class BackupError extends Error {
  * Estructura de datos exportada en el respaldo.
  */
 export interface BackupData {
+  brazil?: BrazilBackup;
   accounts: unknown[];
   transactions: unknown[];
   transactionSplits: unknown[];
@@ -277,6 +279,7 @@ export class BackupService {
       attachments: attachmentData,
       receiptAnalyses,
       receiptItems,
+      brazil: exportBrazil(sqlite, userId),
     };
 
     BackupService.recordHistory(userId, 'export');
@@ -353,6 +356,7 @@ export class BackupService {
 
     // Perform atomic replacement using a database transaction
     sqlite.transaction(() => {
+      clearBrazil(sqlite, userId);
       // Delete all existing user data in dependency order (children first)
       // Credit subscriptions (depends on accounts and subscriptions)
       const userAccounts = db.select({ id: accounts.id }).from(accounts).where(eq(accounts.userId, userId)).all();
@@ -620,6 +624,8 @@ export class BackupService {
         const prev = oldId(rec);
         if (prev != null) transferMap.set(prev, inserted.id);
       }
+
+      restoreBrazil(sqlite, userId, backupData.brazil ?? {}, acctMap, catMap, txMap, transferMap);
 
       // Subscriptions (accountId, categoryId remapped)
       for (const sub of backupData.subscriptions ?? []) {
@@ -940,6 +946,13 @@ export class BackupService {
       'attachments', 'receiptAnalyses', 'receiptItems',
     ];
 
+    if (data['brazil'] !== undefined) {
+      const brazil = data['brazil'];
+      if (!brazil || typeof brazil !== 'object' || Array.isArray(brazil) || Object.values(brazil).some(rows => !Array.isArray(rows) || rows.some(row => !row || typeof row !== 'object' || Array.isArray(row) || Object.values(row).some(value => value !== null && typeof value !== 'string' && typeof value !== 'number')))) {
+        throw new BackupError('Dados brasileiros inválidos no backup', 'INVALID_FORMAT');
+      }
+    }
+
     for (const field of expectedArrayFields) {
       if (data[field] !== undefined && !Array.isArray(data[field])) {
         throw new BackupError(
@@ -954,6 +967,7 @@ export class BackupService {
       exportedAt: obj['exportedAt'] as string,
       userId: typeof obj['userId'] === 'number' ? obj['userId'] : 0,
       data: {
+        brazil: data['brazil'] as BrazilBackup | undefined,
         accounts: Array.isArray(data['accounts']) ? data['accounts'] : [],
         transactions: Array.isArray(data['transactions']) ? data['transactions'] : [],
         transactionSplits: Array.isArray(data['transactionSplits']) ? data['transactionSplits'] : [],
@@ -1009,7 +1023,8 @@ export class BackupService {
     const entities = Object.keys(data) as (keyof BackupData)[];
     const backupCounts: Record<string, number> = {};
     for (const key of entities) {
-      backupCounts[key] = (data[key] as unknown[]).length;
+      const value = data[key];
+      backupCounts[key] = Array.isArray(value) ? value.length : Object.values(value ?? {}).reduce((n, rows) => n + rows.length, 0);
     }
 
     // Current per-user counts (what the import would replace). Counted via SQL
@@ -1042,6 +1057,8 @@ export class BackupService {
         .get(userId) as { n: number } | undefined;
       currentCounts['receiptItems'] = row?.n ?? 0;
     }
+
+    currentCounts['brazil'] = Object.values(exportBrazil(sqlite, userId)).reduce((n, rows) => n + rows.length, 0);
 
     // Warnings: mirror the import's skip logic so the user sees what won't survive.
     const warnings: string[] = [];

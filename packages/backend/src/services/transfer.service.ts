@@ -1,3 +1,4 @@
+import { isManagedEntry } from './managed-entry.js';
 import { eq, desc, and, sql } from 'drizzle-orm';
 import { getDb, getSqlite } from '../db/connection.js';
 import { transfers, accounts, transactions } from '../db/schema.js';
@@ -203,6 +204,7 @@ export class TransferService {
   static delete(id: number, userId: number): void {
     const db = getDb();
     const sqlite = getSqlite();
+    if (isManagedEntry(sqlite,id,true)) throw new TransferError('Use Contas a pagar para alterar um lançamento vinculado a parcela ou fatura', 'MANAGED_ENTRY');
 
     sqlite.transaction(() => {
       // Find the transfer and verify ownership
@@ -246,6 +248,7 @@ export class TransferService {
   static update(id: number, userId: number, input: Partial<CreateTransferSchema>): TransferRecord {
     const db = getDb();
     const sqlite = getSqlite();
+    if (isManagedEntry(sqlite,id,true)) throw new TransferError('Use Contas a pagar para alterar um lançamento vinculado a parcela ou fatura', 'MANAGED_ENTRY');
 
     const result = sqlite.transaction(() => {
       const existing = db
